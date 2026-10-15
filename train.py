@@ -13,7 +13,7 @@ import torch
 from .data import DEFAULT_INPUT, MOLECULES, fit_constants, load_data
 from .models import MODELS, Model
 
-EPOCHS, BATCH_SIZE, LEARNING_RATE = 500, 8, 0.02
+EPOCHS, BATCH_SIZE, LEARNING_RATE = 1000, 8, 0.02
 PROJECT = Path(__file__).resolve().parents[1]
 
 
