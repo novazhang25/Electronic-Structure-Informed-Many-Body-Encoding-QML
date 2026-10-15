@@ -11,7 +11,7 @@ This repository contains the code and data for the paper:
 ## Installation
 
 The reference environment
-uses standard CPython 3.13.2 and the dependency versions below:
+uses standard CPython 3.13.2 and the dependency versions below: \
   numpy==2.5.1 scipy==1.18.0 torch==2.13.0 PennyLane==0.45.1 \
   pandas==3.0.5 matplotlib==3.11.1 pyscf==2.14.0
 
