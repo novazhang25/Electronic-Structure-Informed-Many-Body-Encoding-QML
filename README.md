@@ -16,8 +16,7 @@ uses standard CPython 3.13.2 and the dependency versions below: \
   pandas==3.0.5 matplotlib==3.11.1 pyscf==2.14.0
 
 Training uses the stored descriptor archives and does not require
-rerunning electronic-structure calculations. No editable package installation
-is required when invoking the modules from the repository root.
+rerunning electronic-structure calculations.
 
 ## Citation
 
