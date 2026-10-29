@@ -38,7 +38,7 @@ HF, H2O, NH3, N2, and CO are treated as neutral singlets in STO-3G. RHF equilibr
 | `MB2` | Adds diagonal and off-diagonal products of separately standardized density entries. |
 | `MB3`, `MB4` | Extend `MB2` with independently weighted density-cycle groups through order three or four. |
 | `MB2_gamm0` | Adds standardized $\Gamma^0_2=P_{ii}P_{jj}-\tfrac12 P_{ij}P_{ji}$ from raw selected $P_L$. |
-| `MB2_gamma` | Adds standardized native MP2 $\Gamma_L[I,I,J,J]$. |
+| `MB2_gamma` | Adds standardized native MP2 $\Gamma_L[I,J,I,J]$. |
 | `MB3_gamm0`, `MB4_gamma0` | Add separately standardized RHF-derived $\Gamma^0_k$ for orders two through three or four. |
 | `FG` | Original `FG_production` geometric fingerprint; no density inputs or trainable encoder coefficients. |
 
