@@ -11,22 +11,27 @@ import numpy as np
 import torch
 
 from .data import DEFAULT_INPUT, MOLECULES, fit_constants, load_data
-from .models import MODELS, Model
+from .models import TRAINABLE_MODELS, Model
+from .preprocessing import MANY_BODY_MODELS, model_definition
 
 EPOCHS, BATCH_SIZE, LEARNING_RATE = 1000, 8, 0.02
-PROJECT = Path(__file__).resolve().parents[1]
+IMPLEMENTATION = 'paper_source_v5_v1'
+RESULTS_ROOT = Path(__file__).resolve().parent / 'results'
+
+
+def create_output_directory(requested=None, *, parent=RESULTS_ROOT):
+    output = Path(requested) if requested is not None else Path(parent) / datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    if not output.resolve().is_relative_to(RESULTS_ROOT.resolve()):
+        raise ValueError('Choose a new output directory inside paper_source_v5/results')
+    output.mkdir(parents=True, exist_ok=False)
+    return output
 
 
 def initialize(model, samples, seed):
     generator = torch.Generator(device='cpu').manual_seed(seed)
-    if model.name == 'FG':
-        parts = [0.05 * torch.randn(shape, dtype=torch.float64, generator=generator)
-                 for shape in ((2,), (), (model.num_parameters - 3,))]
-        theta = torch.cat([part.reshape(-1) for part in parts])
-    else:
-        theta = 0.05 * torch.randn(model.num_parameters, dtype=torch.float64,
-                                  generator=generator)
-    # The random draw at the overwritten bias position is still consumed.
+    theta = 0.05 * torch.randn(model.num_parameters, dtype=torch.float64,
+                              generator=generator)
+
     theta[model.bias_index] = np.mean([float(s.target_energy) for s in samples])
     return theta.requires_grad_()
 
@@ -53,15 +58,8 @@ def train(model, samples, seed, epochs=EPOCHS, batch_size=BATCH_SIZE,
           learning_rate=LEARNING_RATE):
     theta = initialize(model, samples, seed)
     initial = theta.detach().clone()
-    i = model.bias_index
-    if model.name == 'FG':
-        parameters = [theta[:i].detach().requires_grad_(),
-                      theta[i].detach().requires_grad_(),
-                      theta[i + 1:].detach().requires_grad_()]
-    else:
-        parameters = [theta]
-    optimizer = torch.optim.Adam(parameters, lr=learning_rate)
-    # Initialization and shuffling use independent generators with the same seed.
+    optimizer = torch.optim.Adam([theta], lr=learning_rate)
+
     shuffle = torch.Generator(device='cpu').manual_seed(seed)
     targets = np.asarray([s.target_energy for s in samples])
     history, best_mae, updates = [], float('inf'), 0
@@ -70,15 +68,10 @@ def train(model, samples, seed, epochs=EPOCHS, batch_size=BATCH_SIZE,
         for start in range(0, len(indices), batch_size):
             batch = [samples[j] for j in indices[start:start + batch_size]]
             optimizer.zero_grad(set_to_none=True)
-            theta.grad = None
             y = torch.stack([torch.as_tensor(s.target_energy, dtype=torch.float64)
                              .reshape(()) for s in batch])
             loss = torch.mean((model.predict_batch(batch, theta) - y) ** 2)
             loss.backward()
-            if model.name == 'FG':
-                for parameter, grad in zip(parameters,
-                        (theta.grad[:i], theta.grad[i], theta.grad[i + 1:])):
-                    parameter.grad = grad.detach()
             optimizer.step()
             updates += 1
         train_mae = float(np.mean(np.abs(targets - predict(model, samples, theta, batch_size))))
@@ -99,7 +92,7 @@ def train(model, samples, seed, epochs=EPOCHS, batch_size=BATCH_SIZE,
 
 def write_csv(path, rows):
     with Path(path).open('w', newline='') as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(stream, fieldnames=list(dict.fromkeys(key for row in rows for key in row)))
         writer.writeheader()
         writer.writerows(rows)
 
@@ -111,15 +104,22 @@ def write_json(path, value):
 def save_run(directory, model, training, testing, result, seed):
     directory.mkdir(parents=True, exist_ok=False)
     write_json(directory / 'preprocessing.json', asdict(model.constants))
-    write_json(directory / 'parameters.json', dict(names=model.names, count=model.num_parameters))
+    definition = model_definition(model.name)
+    layout = dict(parameter_indices=model.parameter_indices, readout_bias_name='bias') if definition else {}
+    write_json(directory / 'parameters.json', dict(implementation=IMPLEMENTATION,
+        model=model.name, names=model.names, count=model.num_parameters,
+        encoder_names=model.encoder_names, **definition, **layout))
     for name in ('initial_theta', 'final_theta'):
         np.save(directory / f'{name}.npy', result[name].numpy())
     np.save(directory / 'best_theta.npy', result['theta'].detach().numpy())
     for name in ('best_optimizer', 'final_optimizer'):
         torch.save(result[name], directory / f'{name}.pt')
-    write_csv(directory / 'training_history.csv', result['history'])
+    write_csv(directory / 'training_history.csv', [
+        dict(molecule=training[0].molecule, model=model.name, seed=seed, **row)
+        for row in result['history']])
     predictions, metrics = [], []
-    identity = dict(molecule=training[0].molecule, model=model.name, seed=seed)
+    identity = dict(molecule=training[0].molecule, model=model.name, seed=seed,
+                    **{key: value for key, value in definition.items() if key != 'one_body_parameter_names'})
     for split, samples in (('train', training), ('test', testing)):
         values = predict(model, samples, result['theta'])
         targets = [s.target_energy for s in samples]
@@ -132,36 +132,61 @@ def save_run(directory, model, training, testing, result, seed):
                 error_Ha=float(value - sample.target_energy)))
     write_csv(directory / 'predictions.csv', predictions)
     write_csv(directory / 'metrics.csv', metrics)
-    write_json(directory / 'result.json', dict(identity, best_epoch=result['best_epoch'],
-        best_train_mae_ha=result['best_train_mae_ha'], update_count=result['update_count']))
+    write_json(directory / 'result.json', dict(identity, implementation=IMPLEMENTATION, best_epoch=result['best_epoch'],
+        best_train_mae_ha=result['best_train_mae_ha'], update_count=result['update_count'],
+        **({'one_body_parameter_names': definition['one_body_parameter_names']} if definition else {})))
     return metrics
 
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--models', nargs='+', choices=[*MODELS, 'all'], default=['MB1'])
+    parser.add_argument('--models', nargs='+', choices=[*TRAINABLE_MODELS, 'all'], default=list(TRAINABLE_MODELS))
     parser.add_argument('--molecules', nargs='+', choices=[*MOLECULES, 'all'], default=['CO'])
-    parser.add_argument('--seeds', nargs='+', type=int, default=[0])
-    parser.add_argument('--epochs', type=int, default=EPOCHS)
+    parser.add_argument('--seeds', nargs='+', type=int, default=list(range(64)),
+                        help='Random seeds (default: 0 through 63)')
+    parser.add_argument('--epochs', type=int, default=EPOCHS,
+                        help='Training epochs per seed (default: %(default)s)')
     parser.add_argument('--input-dir', type=Path, default=DEFAULT_INPUT)
     parser.add_argument('--output-dir', type=Path)
+    parser.add_argument('--list-models', action='store_true')
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
-    names = list(MODELS) if args.models == ['all'] else args.models
+    if args.list_models:
+        for name in TRAINABLE_MODELS:
+            print(name)
+        return
+    names = list(TRAINABLE_MODELS) if args.models == ['all'] else args.models
+    if any(name not in TRAINABLE_MODELS for name in names):
+        parser.error('Use all alone, or select explicit model IDs')
+    if len(set(names)) != len(names) or len(set(args.seeds)) != len(args.seeds):
+        parser.error('Model IDs and seeds must be unique')
+    if any(seed < 0 for seed in args.seeds):
+        parser.error('Seeds must be nonnegative')
     molecules = list(MOLECULES) if args.molecules == ['all'] else args.molecules
+    if any(molecule not in MOLECULES for molecule in molecules):
+        parser.error('Use all alone, or select explicit molecule IDs')
+    if len(set(molecules)) != len(molecules):
+        parser.error('Molecule IDs must be unique')
     if args.epochs < 1:
         parser.error('--epochs must be positive')
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
-    output = args.output_dir or PROJECT / 'results_paper_v2' / datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    if output.resolve().is_relative_to(Path(__file__).resolve().parent):
-        parser.error('Choose an output directory outside paper_source_v2')
-    output.mkdir(parents=True, exist_ok=False)
-    write_json(output / 'configuration.json', dict(models=names, molecules=molecules,
+    try:
+        output = create_output_directory(args.output_dir)
+    except (ValueError, FileExistsError) as error:
+        parser.error(str(error))
+    write_json(output / 'configuration.json', dict(implementation=IMPLEMENTATION, models=names, molecules=molecules,
         seeds=args.seeds, epochs=args.epochs, batch_size=BATCH_SIZE, learning_rate=LEARNING_RATE,
-        optimizer='Adam', loss='MSE', checkpoint_selection='train', input_dir=str(args.input_dir.resolve())))
+        optimizer='Adam', loss='MSE', checkpoint_selection='train', input_dir=str(args.input_dir.resolve()),
+        **({'model_definitions': {name: model_definition(name) for name in names if name in MANY_BODY_MODELS}}
+           if set(names) & MANY_BODY_MODELS else {})))
     all_metrics = []
     for molecule in molecules:
-        training, testing = load_data(args.input_dir, molecule)
+        training, testing = load_data(args.input_dir, molecule, include_f=False)
         (output / molecule).mkdir()
         write_json(output / molecule / 'population.json', dict(
             train=[s.sample_id for s in training], test=[s.sample_id for s in testing],
@@ -179,7 +204,6 @@ def main():
                 print(f"Test MAE: {rows[1]['mae_mHa']:.8g} mHa", flush=True)
     write_csv(output / 'metrics.csv', all_metrics)
     print(f'Results: {output}', flush=True)
-
 
 if __name__ == '__main__':
     main()
