@@ -24,8 +24,6 @@ paper_source_v5/
 ├── checkpoints.py         # Saved-checkpoint validation and inference
 ├── bond_extrapolation.py  # Bond-length extrapolation with fixed parameters
 ├── prepare.py             # Input validation
-├── plot.py                # Saved prediction errors and MAE summaries
-├── tests/                 # Production-loading integration tests
 └── requirements.txt       # Pinned dependencies
 ```
 
@@ -43,7 +41,7 @@ HF, H2O, NH3, N2, CO, and H2O2 are treated as neutral singlets in STO-3G. RHF eq
 | `MB3_gamm0`, `MB4_gamma0` | Add separately standardized RHF-derived $\Gamma^0_k$ for orders two through three or four. |
 
 - Circuits: one qubit per selected AO; $(\pi/2)\tanh(u)$ encoding angles with `RY`, `IsingZZ`, and `MultiRZ` gates; two layers of shared `RY` rotations and CNOT rings. A linear readout uses local Pauli-Z expectations and their first three moments. PennyLane `default.qubit` uses exact expectations and PyTorch backpropagation.
-- Preprocessing: 15 odd-indexed geometries (`001,003,...,029`) for training and 15 even-indexed geometries for testing; all normalization statistics use training data only (`ddof=0`).
+- Preprocessing: 15 odd-indexed geometries (`001,003,...,029`) for training and 15 even-indexed geometries for testing; all normalization statistics use training data only.
 - Training defaults: seeds 0–63, 1000 epochs, Adam, learning rate 0.02, batch size 8, and mean squared error loss. Parameters use float64 Gaussian initialization with standard deviation 0.05; the readout bias starts at the training-target mean.
 - Evaluation: select the epoch with minimum full-training MAE, then evaluate held-out predictions. MAE, RMSE, maximum absolute error, and signed-error amplitude are reported in Hartree and mHa.
 
