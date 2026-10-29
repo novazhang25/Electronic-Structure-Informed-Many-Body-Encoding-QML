@@ -22,9 +22,7 @@ class Sample:
     active_ao_labels: tuple[str, ...]
     source_selected_ao_indices: np.ndarray
     pii: np.ndarray
-    fii: np.ndarray
     pij: np.ndarray
-    fij: np.ndarray
     target_energy: float
     rhf_total_energy: float
     fci_total_energy: float
@@ -39,8 +37,6 @@ class Constants:
     n_active: int
     Pii_mean: float = 0.0
     Pii_std: float = 1.0
-    Fii_mean: float = 0.0
-    Fii_std: float = 1.0
     Pij_abs95: float = 0.0
     alpha: float = 0.0
     mu: tuple[float, ...] | None = None
@@ -57,7 +53,7 @@ def density_descriptors(P, gamma_raw, selected):
     return values
 
 
-def load_sample(path, molecule, geometry_index, sample_id=None, *, include_reference=True, include_f=True):
+def load_sample(path, molecule, geometry_index, sample_id=None, *, include_reference=True):
     symbols, active = MOLECULES[molecule]
     path = Path(path)
     with np.load(path, allow_pickle=False) as raw:
@@ -77,7 +73,6 @@ def load_sample(path, molecule, geometry_index, sample_id=None, *, include_refer
                           for i in selected)
 
         P = raw['P_L'][np.ix_(selected, selected)]
-        F = raw['F_L'][np.ix_(selected, selected)] if include_f else None
         gamma = transform_rank4(raw['Gamma_MP2_AO_pyscf'], raw['S_half'])
         rhf, fci = ((float(raw['E_RHF_input']), float(raw['E_FCI']))
                     if include_reference else (np.nan, np.nan))
@@ -87,18 +82,18 @@ def load_sample(path, molecule, geometry_index, sample_id=None, *, include_refer
             geometry_index=geometry_index, scan_coordinate=float(raw['q_A']),
             bond_length=float(raw['bond_length_A']), active_ao_indices=np.asarray(active),
             active_ao_labels=ao_labels, source_selected_ao_indices=selected,
-            pii=np.diag(P), fii=np.diag(F) if F is not None else None, pij=P, fij=F,
+            pii=np.diag(P), pij=P,
             target_energy=fci - rhf, rhf_total_energy=rhf, fci_total_energy=fci,
             source_file=path,
             descriptors=density_descriptors(P, gamma, selected),
         )
 
 
-def load_data(input_dir=DEFAULT_INPUT, molecule='CO', *, include_f=True, geometric=False):
+def load_data(input_dir=DEFAULT_INPUT, molecule='CO', *, geometric=False):
     if geometric:
         from .FG import load_data as load_fg_data
         return load_fg_data(input_dir, molecule)
-    samples = [load_sample(Path(input_dir) / molecule / f'{index:03d}.npz', molecule, index, include_f=include_f)
+    samples = [load_sample(Path(input_dir) / molecule / f'{index:03d}.npz', molecule, index)
                for index in range(1, 31)]
     return split_samples(samples)
 
@@ -132,6 +127,13 @@ def constants_from_saved(saved, name):
         return preprocessing.constants_from_saved(saved, name)
     if name != 'MB1':
         raise KeyError(name)
-    if set(saved) != {field.name for field in fields(Constants)}:
+    return generic_constants_from_saved(saved)
+
+
+def generic_constants_from_saved(saved):
+    """Read MB1/FG statistics, accepting unused fields in historical checkpoints."""
+    expected = {field.name for field in fields(Constants)}
+    legacy = {'Fii_mean', 'Fii_std'}
+    if set(saved) not in (expected, expected | legacy):
         raise ValueError('Unexpected preprocessing schema')
-    return Constants(**saved)
+    return Constants(**{key: value for key, value in saved.items() if key in expected})

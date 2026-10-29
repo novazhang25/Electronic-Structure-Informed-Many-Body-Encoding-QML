@@ -198,7 +198,8 @@ def read_checkpoint(directory):
                 raise ValueError(f'Incompatible saved preprocessing {key}')
             adapted[key] = definition[key]
     validated = constants_from_saved(adapted, name)
-    constants = type(validated)(**saved)  # Keep the original schema labels and numeric values.
+    # Many-body formats retain their original schema labels; MB1 drops only obsolete fields.
+    constants = type(validated)(**saved) if name in MANY_BODY_MODELS else validated
     if name == 'MB1' and (not np.isfinite([constants.Pii_mean, constants.Pii_std]).all()
                          or constants.Pii_std <= 0):
         raise ValueError('Invalid MB1 saved normalization')
@@ -302,7 +303,7 @@ def load_checkpoint(directory, input_dir=None, *, samples=None):
     is_fg = identity['model'] == 'FG'
     if samples is None:
         options = dict(geometric=True) if is_fg else {}
-        training, testing = load_data(input_dir or DEFAULT_INPUT, identity['molecule'], include_f=False, **options)
+        training, testing = load_data(input_dir or DEFAULT_INPUT, identity['molecule'], **options)
     else:
         training, testing = samples
         if is_fg:

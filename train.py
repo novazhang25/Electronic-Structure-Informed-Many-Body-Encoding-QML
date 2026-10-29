@@ -208,7 +208,7 @@ def main():
            if any(model_definition(name) for name in names) else {})))
     all_metrics = []
     for molecule in molecules:
-        training, testing = load_data(args.input_dir, molecule, include_f=False, geometric=names == ['FG'])
+        training, testing = load_data(args.input_dir, molecule, geometric=names == ['FG'])
         (output / molecule).mkdir()
         write_json(output / molecule / 'population.json', dict(
             train=[s.sample_id for s in training], test=[s.sample_id for s in testing],

@@ -3,7 +3,7 @@
 Distances use Angstrom, inverse distances use Angstrom^-1, angles use radians.
 One feature occupies one qubit, including columns constant on the training set.
 """
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 import math
 from pathlib import Path
 
@@ -11,7 +11,7 @@ import numpy as np
 import pennylane as qml
 import torch
 
-from .data import Constants
+from .data import Constants, generic_constants_from_saved
 from .models import hea, readout_features
 from .registry import DEFAULT_DESCRIPTOR_DIR, MOLECULES
 
@@ -68,7 +68,7 @@ class Sample:
     fingerprint: np.ndarray
 
 
-def load_sample(path, molecule, geometry_index, sample_id=None, *, include_reference=True, include_f=False):
+def load_sample(path, molecule, geometry_index, sample_id=None, *, include_reference=True):
     """Read geometry and energies only; FG does not require electronic descriptors."""
     path = Path(path)
     with np.load(path, allow_pickle=False) as raw:
@@ -88,7 +88,7 @@ def prepare_samples(samples):
     return sorted(samples, key=lambda s: (s.scan_coordinate, s.geometry_index))
 
 
-def load_data(input_dir=DEFAULT_DESCRIPTOR_DIR, molecule='CO', *, include_f=False):
+def load_data(input_dir=DEFAULT_DESCRIPTOR_DIR, molecule='CO'):
     from .data import split_samples
     samples = [load_sample(Path(input_dir) / molecule / f'{i:03d}.npz', molecule, i)
                for i in range(1, 31)]
@@ -107,9 +107,7 @@ def fit_constants(training):
 
 
 def constants_from_saved(saved):
-    if set(saved) != {f.name for f in fields(Constants)}:
-        raise ValueError('Unexpected FG preprocessing schema')
-    c = Constants(**saved)
+    c = generic_constants_from_saved(saved)
     width = len(FEATURE_NAMES[c.molecule])
     mu, sigma, safe, mask = [np.asarray(getattr(c, k))
                             for k in ('mu', 'sigma', 'sigma_safe', 'constant_mask')]

@@ -830,7 +830,7 @@ def rhf_arrays(mf):
     return {
         "mo_coeff": mf.mo_coeff, "mo_occ": mf.mo_occ, "mo_energy_Ha": mf.mo_energy,
         "rhf_density_ao": mf.make_rdm1(), "overlap_ao": mf.get_ovlp(),
-        "hcore_ao_Ha": mf.get_hcore(), "fock_ao_Ha": mf.get_fock(),
+        "hcore_ao_Ha": mf.get_hcore(),
         "molecule_pyscf_json": np.asarray(mf.mol.dumps()), "E_RHF_Ha": np.asarray(mf.e_tot),
     }
 

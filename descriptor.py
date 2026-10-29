@@ -45,9 +45,9 @@ def disconnected_rhf(P):
     return np.einsum("pq,rs->pqrs", P, P) - .5*np.einsum("ps,rq->pqrs", P, P)
 
 
-def lowdin_factors(S):
+def lowdin_half(S):
     eigenvalues, U = np.linalg.eigh(S)
-    return (U*np.sqrt(eigenvalues))@U.T, (U/np.sqrt(eigenvalues))@U.T
+    return (U*np.sqrt(eigenvalues))@U.T
 
 
 def transform_rank4(tensor, A):
@@ -77,13 +77,13 @@ def select_valence_aos(mol):
             "ao_shell_metadata_json": np.asarray(json.dumps(shells))}
 
 
-def extract_descriptors(P_L, F_L, valence_indices):
+def extract_descriptors(P_L, valence_indices):
     v = np.asarray(valence_indices)
     n = len(v)
-    P, F = P_L[np.ix_(v,v)], F_L[np.ix_(v,v)]
+    P = P_L[np.ix_(v,v)]
     pairs = np.asarray(list(itertools.combinations(range(n),2)), dtype=int).reshape(-1,2)
     triples = np.asarray(list(itertools.combinations(range(n), 3)), dtype=int).reshape(-1, 3)
-    return {"P_mu": np.diag(P).copy(), "F_mu": np.diag(F).copy(),
+    return {"P_mu": np.diag(P).copy(),
             "pair_indices": pairs, "P_munu": P[pairs[:,0],pairs[:,1]],
             "triple_indices": triples}
 
@@ -111,8 +111,7 @@ def calculate_record(record):
     pt = mp2.RMP2(mf, frozen=0)
     e_mp2, t2 = pt.kernel()
     C, S, P = mf.mo_coeff, mf.get_ovlp(), mf.make_rdm1()
-    F = mf.get_fock(dm=P)
-    arrays = {"S_AO": S, "P_AO": P, "F_AO": F,
+    arrays = {"S_AO": S, "P_AO": P,
               "hcore_AO": mf.get_hcore(), "eri_AO": mol.intor("int2e", aosym="s1"),
               "E_nuclear": mol.energy_nuc(), "E_RHF_calculated": mf.e_tot,
               "E_MP2_correlation": e_mp2, "E_MP2_total": mf.e_tot+e_mp2,
@@ -124,11 +123,10 @@ def calculate_record(record):
     arrays['Gamma_MP2_AO_pyscf'] = transform_rank4(arrays['Gamma_MP2_MO_pyscf'], C)
     gamma0 = disconnected_rhf(P)
     arrays.update(Gamma0_HF_AO=gamma0, Gamma0_AO=gamma0)
-    half, inverse = lowdin_factors(S)
-    arrays.update(S_half=half, S_minus_half=inverse, P_L=half@P@half,
-                  F_L=inverse@F@inverse)
+    half = lowdin_half(S)
+    arrays.update(S_half=half, P_L=half@P@half)
     arrays.update(select_valence_aos(mol))
-    arrays.update(extract_descriptors(arrays["P_L"], arrays["F_L"], arrays["valence_indices"]))
+    arrays.update(extract_descriptors(arrays["P_L"], arrays["valence_indices"]))
     metadata = {"rdm_source": RDM_SOURCE, "perturbative_order": 2,
                 "orbital_response": "unrelaxed; occupied-virtual response omitted",
                 "model_one_body_density": "P_AO and P_L remain RHF",

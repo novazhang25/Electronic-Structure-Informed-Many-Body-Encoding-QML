@@ -167,7 +167,7 @@ def prepare_sources(args):
     input_dir = args.input_dir.expanduser().resolve()
     source_samples, scans, geometries = {}, {}, {}
     for molecule in args.molecules:
-        source_samples[molecule] = load_data(input_dir, molecule, include_f=False)
+        source_samples[molecule] = load_data(input_dir, molecule)
         scans[molecule], geometries[molecule] = source_scan(*source_samples[molecule], args.points_per_side,
                                                           native_gamma='MB2_gamma' in args.models)
     contexts, replays = [], []
@@ -213,7 +213,7 @@ def generate_samples(output, records, source):
                      input_geometry_path=str(folder / 'geometry.xyz'))
         descriptor.save_record(output / 'descriptors', point, descriptor.calculate_record(point))
         sample = load_sample(output / 'descriptors' / molecule / f'{gid}.npz', molecule,
-                             record['point_index'], sample_id=f'{molecule}/{gid}', include_f=False)
+                             record['point_index'], sample_id=f'{molecule}/{gid}')
         for key in ('active_ao_indices', 'source_selected_ao_indices', 'active_ao_labels'):
             if list(getattr(sample, key)) != list(getattr(source, key)):
                 raise ValueError(f'{molecule}/{gid}: selected AO order differs from the source: {key}')
