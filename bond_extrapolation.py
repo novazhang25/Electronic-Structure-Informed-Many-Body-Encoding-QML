@@ -13,7 +13,7 @@ import torch
 from . import descriptor, initialdata
 from .checkpoints import load_checkpoint, saved_tables, select_checkpoints
 from .data import DEFAULT_INPUT, load_data, load_sample
-from .models import MODELS, Model
+from .models import DEFAULT_MODELS, MODELS, Model
 from .registry import MOLECULE_NAMES
 from .train import RESULTS_ROOT, create_output_directory, predict, write_json
 
@@ -337,7 +337,8 @@ def parse_args(argv=None):
     parser.add_argument('--source-run', type=Path, required=True, help='Explicit production root, molecule/model directory, or seed directory')
     parser.add_argument('--input-dir', type=Path, default=DEFAULT_INPUT, help='Existing native descriptor directory')
     parser.add_argument('--molecules', nargs='+', choices=[*MOLECULE_NAMES, 'all'], default=['all'])
-    parser.add_argument('--models', nargs='+', choices=[*MODELS, 'all'], default=['all'])
+    parser.add_argument('--models', nargs='+', choices=[*MODELS, 'all'], default=list(DEFAULT_MODELS),
+                        help='Default: the eight MB models; explicit all includes FG')
     parser.add_argument('--seeds', nargs='+', type=int, default=list(range(64)))
     parser.add_argument('--points-per-side', type=int, default=10)
     parser.add_argument('--threads', type=int, default=1)

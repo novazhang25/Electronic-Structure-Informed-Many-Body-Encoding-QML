@@ -94,9 +94,16 @@ def load_sample(path, molecule, geometry_index, sample_id=None, *, include_refer
         )
 
 
-def load_data(input_dir=DEFAULT_INPUT, molecule='CO', *, include_f=True):
+def load_data(input_dir=DEFAULT_INPUT, molecule='CO', *, include_f=True, geometric=False):
+    if geometric:
+        from .FG import load_data as load_fg_data
+        return load_fg_data(input_dir, molecule)
     samples = [load_sample(Path(input_dir) / molecule / f'{index:03d}.npz', molecule, index, include_f=include_f)
                for index in range(1, 31)]
+    return split_samples(samples)
+
+
+def split_samples(samples):
     samples.sort(key=lambda s: (s.scan_coordinate, s.geometry_index))
     training = tuple(s for s in samples if s.geometry_index % 2 == 1)
     testing = tuple(s for s in samples if s.geometry_index % 2 == 0)
@@ -104,6 +111,9 @@ def load_data(input_dir=DEFAULT_INPUT, molecule='CO', *, include_f=True):
 
 
 def fit_constants(training, name='MB1'):
+    if name == 'FG':
+        from .FG import fit_constants as fit_fg_constants
+        return fit_fg_constants(training)
     if name in preprocessing.MANY_BODY_MODELS:
         return preprocessing.fit_many_body_constants(training, name)
     if name != 'MB1':
@@ -115,6 +125,9 @@ def fit_constants(training, name='MB1'):
 
 
 def constants_from_saved(saved, name):
+    if name == 'FG':
+        from .FG import constants_from_saved as fg_constants_from_saved
+        return fg_constants_from_saved(saved)
     if name in preprocessing.MANY_BODY_MODELS:
         return preprocessing.constants_from_saved(saved, name)
     if name != 'MB1':

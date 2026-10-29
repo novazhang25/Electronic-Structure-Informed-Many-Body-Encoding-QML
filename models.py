@@ -28,6 +28,8 @@ MODELS = {
     'MB2_gamma': ((('a2', 'Gamma_2'),),),
     **HIERARCHY_LAYERS,
 }
+DEFAULT_MODELS = tuple(MODELS)
+MODELS['FG'] = ()
 TRAINABLE_MODELS = tuple(MODELS)
 
 
@@ -47,6 +49,12 @@ def readout_features(z, context_width):
 
 
 class Model:
+    def __new__(cls, constants, name, samples):
+        if name == 'FG':
+            from .FG import FGModel
+            return FGModel(constants, name, samples)
+        return super().__new__(cls)
+
     def __init__(self, constants, name, samples):
         if name not in MODELS:
             raise ValueError(f'Unknown paper_source_v5 model: {name}')

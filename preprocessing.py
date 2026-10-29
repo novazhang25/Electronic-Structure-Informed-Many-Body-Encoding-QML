@@ -312,6 +312,9 @@ def cycle_definition(name):
 
 
 def model_definition(name):
+    if name == 'FG':
+        from .FG import model_definition as fg_definition
+        return fg_definition()
     if name in CYCLE_MODELS:
         return cycle_definition(name)
     if name in HIERARCHY_LAYERS:

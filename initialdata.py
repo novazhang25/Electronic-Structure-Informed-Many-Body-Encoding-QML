@@ -36,7 +36,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 SCHEMA_VERSION = "initialdata-v1"
 ACTIVE_SPACES = {
     "HF": (1, 5, 8), "H2O": (1, 6, 8), "NH3": (1, 7, 8),
-    "N2": (2, 8, 10), "CO": (2, 8, 10), "H2O2": (2, 10, 14),
+    "N2": (2, 8, 10), "CO": (2, 8, 10),
 }
 SCF_GRADIENT_LIMIT = 1e-10
 STABILITY_LIMIT = -1e-7
@@ -45,7 +45,7 @@ STABILITY_LIMIT = -1e-7
 FORMULAS = {
     "HF": {"H": 1, "F": 1}, "H2O": {"O": 1, "H": 2},
     "NH3": {"N": 1, "H": 3}, "N2": {"N": 2},
-    "CO": {"C": 1, "O": 1}, "H2O2": {"O": 2, "H": 2},
+    "CO": {"C": 1, "O": 1},
 }
 STARS = {"H2O": "O", "NH3": "N"}
 DIATOMICS = {"N2", "CO", "HF"}
@@ -201,23 +201,6 @@ class StretchPath:
             self.stretches = [(self.heavy, h) for h in self.hydrogens]
             self.angles = [(i, self.heavy, j) for i, j in itertools.combinations(self.hydrogens, 2)]
             self.definition = f"r({STARS[name]}-H_i) = r_e({STARS[name]}-H_i) + q for every H"
-        elif name == "H2O2":
-            self.oxygens = [i for i, sym in enumerate(symbols) if sym == "O"]
-            hydrogens = [i for i, sym in enumerate(symbols) if sym == "H"]
-            assignments = sorted(
-                (sum(bond(self.ref, o, h) for o, h in zip(self.oxygens, perm)), perm)
-                for perm in itertools.permutations(hydrogens)
-            )
-            if abs(assignments[0][0] - assignments[1][0]) < 1e-8:
-                raise ValueError("Ambiguous OH connectivity in the optimized peroxide geometry.")
-            h1, h2 = assignments[0][1]
-            o1, o2 = self.oxygens
-            self.peroxide_h = (h1, h2)
-            self.stretches = [(o1, o2)]
-            self.fixed_bonds = [(o1, h1), (o2, h2)]
-            self.angles = [(h1, o1, o2), (o1, o2, h2)]
-            self.dihedrals = [(h1, o1, o2, h2)]
-            self.definition = "q = r(O-O) - r_e(O-O); both OH lengths, OOH angles and HOOH torsion fixed"
         else:
             raise ValueError(f"Unsupported molecule: {name}")
         self.lengths = np.array([bond(self.ref, *pair) for pair in self.stretches])
@@ -236,13 +219,6 @@ class StretchPath:
             for (heavy, h), length in zip(self.stretches, self.lengths):
                 ray = (self.ref[h] - self.ref[heavy]) / length
                 coords[h] = coords[heavy] + (length + q) * ray
-        else:
-            o1, o2 = self.oxygens
-            h1, h2 = self.peroxide_h
-            axis = (self.ref[o2] - self.ref[o1]) / self.lengths[0]
-            coords[o2] = coords[o1] + (self.lengths[0] + q) * axis
-            coords[h1] = coords[o1] + (self.ref[h1] - self.ref[o1])
-            coords[h2] = coords[o2] + (self.ref[h2] - self.ref[o2])
         return coords
 
     def __call__(self, q):
@@ -733,10 +709,6 @@ def starting_geometries(name):
     if name == "NH3":
         coords = [[0., 0., 0.]] + [[math.cos(phi), math.sin(phi), .4] for phi in (0., 2*math.pi/3, 4*math.pi/3)]
         return [(["N", "H", "H", "H"], np.array(coords))]
-    if name == "H2O2":
-        return [(["O", "O", "H", "H"], np.array([[0., 0., -.75], [0., 0., .75],
-                  [1., 0., -1.], [math.cos(phi), math.sin(phi), 1.]]))
-                for phi in np.deg2rad([60., 120., 160.])]
     raise ValueError(f"Unsupported molecule: {name}")
 
 

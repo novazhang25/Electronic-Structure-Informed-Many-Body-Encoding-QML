@@ -11,8 +11,9 @@ import numpy as np
 import torch
 
 from .data import DEFAULT_INPUT, MOLECULES, fit_constants, load_data
-from .models import TRAINABLE_MODELS, Model
-from .preprocessing import MANY_BODY_MODELS, model_definition
+from .models import DEFAULT_MODELS, TRAINABLE_MODELS, Model
+from .preprocessing import model_definition
+from .FG import FEATURE_NAMES, FEATURE_UNITS
 
 EPOCHS, BATCH_SIZE, LEARNING_RATE = 1000, 8, 0.02
 IMPLEMENTATION = 'paper_source_v5_v1'
@@ -29,8 +30,13 @@ def create_output_directory(requested=None, *, parent=RESULTS_ROOT):
 
 def initialize(model, samples, seed):
     generator = torch.Generator(device='cpu').manual_seed(seed)
-    theta = 0.05 * torch.randn(model.num_parameters, dtype=torch.float64,
-                              generator=generator)
+    if model.name == 'FG':
+        parts = [0.05 * torch.randn(shape, dtype=torch.float64, generator=generator)
+                 for shape in ((2,), (), (model.num_parameters - 3,))]
+        theta = torch.cat([part.reshape(-1) for part in parts])
+    else:
+        theta = 0.05 * torch.randn(model.num_parameters, dtype=torch.float64,
+                                  generator=generator)
 
     theta[model.bias_index] = np.mean([float(s.target_energy) for s in samples])
     return theta.requires_grad_()
@@ -58,7 +64,12 @@ def train(model, samples, seed, epochs=EPOCHS, batch_size=BATCH_SIZE,
           learning_rate=LEARNING_RATE):
     theta = initialize(model, samples, seed)
     initial = theta.detach().clone()
-    optimizer = torch.optim.Adam([theta], lr=learning_rate)
+    i = model.bias_index
+    parameters = ([theta[:i].detach().requires_grad_(),
+                   theta[i].detach().requires_grad_(),
+                   theta[i + 1:].detach().requires_grad_()]
+                  if model.name == 'FG' else [theta])
+    optimizer = torch.optim.Adam(parameters, lr=learning_rate)
 
     shuffle = torch.Generator(device='cpu').manual_seed(seed)
     targets = np.asarray([s.target_energy for s in samples])
@@ -68,10 +79,16 @@ def train(model, samples, seed, epochs=EPOCHS, batch_size=BATCH_SIZE,
         for start in range(0, len(indices), batch_size):
             batch = [samples[j] for j in indices[start:start + batch_size]]
             optimizer.zero_grad(set_to_none=True)
+            if model.name == 'FG':
+                theta.grad = None
             y = torch.stack([torch.as_tensor(s.target_energy, dtype=torch.float64)
                              .reshape(()) for s in batch])
             loss = torch.mean((model.predict_batch(batch, theta) - y) ** 2)
             loss.backward()
+            if model.name == 'FG':
+                for parameter, grad in zip(parameters,
+                        (theta.grad[:i], theta.grad[i], theta.grad[i + 1:])):
+                    parameter.grad = grad.detach()
             optimizer.step()
             updates += 1
         train_mae = float(np.mean(np.abs(targets - predict(model, samples, theta, batch_size))))
@@ -106,6 +123,10 @@ def save_run(directory, model, training, testing, result, seed):
     write_json(directory / 'preprocessing.json', asdict(model.constants))
     definition = model_definition(model.name)
     layout = dict(parameter_indices=model.parameter_indices, readout_bias_name='bias') if definition else {}
+    if model.name == 'FG':
+        layout.update(feature_names=FEATURE_NAMES[model.constants.molecule],
+                      feature_units=FEATURE_UNITS[model.constants.molecule],
+                      atom_order=MOLECULES[model.constants.molecule][0])
     write_json(directory / 'parameters.json', dict(implementation=IMPLEMENTATION,
         model=model.name, names=model.names, count=model.num_parameters,
         encoder_names=model.encoder_names, **definition, **layout))
@@ -140,7 +161,8 @@ def save_run(directory, model, training, testing, result, seed):
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--models', nargs='+', choices=[*TRAINABLE_MODELS, 'all'], default=list(TRAINABLE_MODELS))
+    parser.add_argument('--models', nargs='+', choices=[*TRAINABLE_MODELS, 'all'], default=list(DEFAULT_MODELS),
+                        help='Default: the eight MB models; explicit all includes FG')
     parser.add_argument('--molecules', nargs='+', choices=[*MOLECULES, 'all'], default=['CO'])
     parser.add_argument('--seeds', nargs='+', type=int, default=list(range(64)),
                         help='Random seeds (default: 0 through 63)')
@@ -182,24 +204,27 @@ def main():
     write_json(output / 'configuration.json', dict(implementation=IMPLEMENTATION, models=names, molecules=molecules,
         seeds=args.seeds, epochs=args.epochs, batch_size=BATCH_SIZE, learning_rate=LEARNING_RATE,
         optimizer='Adam', loss='MSE', checkpoint_selection='train', input_dir=str(args.input_dir.resolve()),
-        **({'model_definitions': {name: model_definition(name) for name in names if name in MANY_BODY_MODELS}}
-           if set(names) & MANY_BODY_MODELS else {})))
+        **({'model_definitions': {name: model_definition(name) for name in names if model_definition(name)}}
+           if any(model_definition(name) for name in names) else {})))
     all_metrics = []
     for molecule in molecules:
-        training, testing = load_data(args.input_dir, molecule, include_f=False)
+        training, testing = load_data(args.input_dir, molecule, include_f=False, geometric=names == ['FG'])
         (output / molecule).mkdir()
         write_json(output / molecule / 'population.json', dict(
             train=[s.sample_id for s in training], test=[s.sample_id for s in testing],
-            active_ao_indices=training[0].active_ao_indices.tolist(),
-            source_selected_ao_indices=training[0].source_selected_ao_indices.tolist(),
-            active_ao_labels=training[0].active_ao_labels))
+            **(dict(feature_names=FEATURE_NAMES[molecule]) if names == ['FG'] else dict(
+                active_ao_indices=training[0].active_ao_indices.tolist(),
+                source_selected_ao_indices=training[0].source_selected_ao_indices.tolist(),
+                active_ao_labels=training[0].active_ao_labels))))
         for name in names:
-            model = Model(fit_constants(training, name), name, training + testing)
+            model_training, model_testing = ((training, testing) if name != 'FG' or names == ['FG']
+                else load_data(args.input_dir, molecule, geometric=True))
+            model = Model(fit_constants(model_training, name), name, model_training + model_testing)
             for seed in args.seeds:
                 print(f'Training {molecule} / {name} / seed {seed}: {args.epochs} epochs', flush=True)
-                result = train(model, training, seed, args.epochs)
+                result = train(model, model_training, seed, args.epochs)
                 rows = save_run(output / molecule / name / f'seed_{seed:02d}',
-                                model, training, testing, result, seed)
+                                model, model_training, model_testing, result, seed)
                 all_metrics.extend(rows)
                 print(f"Test MAE: {rows[1]['mae_mHa']:.8g} mHa", flush=True)
     write_csv(output / 'metrics.csv', all_metrics)

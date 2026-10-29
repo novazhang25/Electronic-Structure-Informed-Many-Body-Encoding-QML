@@ -49,6 +49,8 @@ def select_checkpoints(source, molecule, name, seeds=None):
 
 
 def validate_definition(record, name, version, *, csv_row=False):
+    if name == 'FG' and version in ('codes_v3_pdf', 'codes_fg', 'codes_run1_fg'):
+        return  # These production formats predate the v5 definition metadata.
     for key, value in model_definition(name).items():
         if csv_row and key == 'one_body_parameter_names':
             continue
@@ -62,9 +64,116 @@ def validate_definition(record, name, version, *, csv_row=False):
             raise ValueError(f'Incompatible {name} {key}: {actual!r}; expected {value!r}')
 
 
+def _read_fg_checkpoint(directory):
+    """Adapt the three archived FG formats without rewriting their source files."""
+    from .FG import FEATURE_NAMES, FEATURE_UNITS
+
+    result_path = directory / 'result.json'
+    identity = json.loads(result_path.read_text())
+    molecule, seed = directory.parent.parent.name, int(directory.name.removeprefix('seed_'))
+    if molecule not in MOLECULES or seed < 0 or directory.name != f'seed_{seed:02d}':
+        raise ValueError('Unsupported FG checkpoint molecule or seed')
+    files = [result_path, directory / 'best_theta.npy', directory / 'training_history.csv',
+             directory / 'predictions.csv', directory / 'metrics.csv']
+    metadata_path, preprocessing_path = directory / 'parameters.json', directory / 'preprocessing.json'
+    metadata = json.loads(metadata_path.read_text()) if metadata_path.is_file() else None
+    implementation = identity.get('implementation')
+    if implementation is None:
+        provenance = directory.parents[2] / 'provenance' / molecule
+        manifest_path, configuration_path = provenance / 'source.json', provenance / 'configuration.json'
+        manifest, configuration = [json.loads(p.read_text()) for p in (manifest_path, configuration_path)]
+        if (molecule not in ('CO', 'HF', 'H2O') or configuration.get('molecules') != [molecule]
+                or configuration.get('models', configuration.get('methods')) != ['FG']
+                or configuration.get('epochs') != 1000 or configuration.get('batch_size') != 8
+                or configuration.get('learning_rate') != 0.02 or seed not in configuration['seeds']):
+            raise ValueError('Unrecognized imported FG production configuration')
+        for path in directory.iterdir():
+            if path.is_file() and path.name != '.DS_Store':
+                expected = manifest['sha256'].get(f'{directory.name}/{path.name}')
+                if expected != hashlib.sha256(path.read_bytes()).hexdigest():
+                    raise ValueError(f'Imported FG checkpoint differs from its provenance: {path}')
+        files.extend((manifest_path, configuration_path))
+        if molecule == 'CO':
+            if metadata is not None or identity.get('checkpoint_selection') != 'train':
+                raise ValueError('Unrecognized canonical CO FG checkpoint')
+            preprocessing_path = provenance / 'preprocessing.json'
+            original = json.loads(preprocessing_path.read_text())['CO/FG']
+            if (original['schema_version'] != 'canonical-fingerprint-v1'
+                    or original['epsilon'] != 1e-12 or original['model_label'] != 'FG'):
+                raise ValueError('Incompatible canonical CO FG preprocessing')
+            from .data import Constants
+            from dataclasses import asdict
+            saved = asdict(Constants(**{key: original[key] for key in
+                ('molecule', 'training_sample_ids', 'n_active', 'mu', 'sigma', 'sigma_safe', 'constant_mask')}))
+            implementation = 'codes_run1_fg_v1'
+            for key in ('molecule', 'model', 'seed'):
+                if identity['restored_train_metrics'][key] != identity['final_test_metrics'][key]:
+                    raise ValueError('Conflicting canonical CO FG result identity')
+                identity[key] = identity['restored_train_metrics'][key]
+        else:
+            if metadata is None or set(metadata) != {'names', 'count'}:
+                raise ValueError('Unrecognized imported FG parameter metadata')
+            saved = json.loads(preprocessing_path.read_text())
+            implementation = 'codes_fg_v1'
+    elif implementation in (IMPLEMENTATION, 'codes_v3_pdf_v1'):
+        if metadata is None or metadata.get('implementation') != implementation or metadata.get('model') != 'FG':
+            raise ValueError('Conflicting FG checkpoint implementation or model')
+        saved = json.loads(preprocessing_path.read_text())
+        for record in (identity, metadata):
+            validate_definition(record, 'FG', implementation.removesuffix('_v1'))
+    else:
+        raise ValueError('Unsupported FG checkpoint implementation')
+    if (identity.get('molecule'), identity.get('model'), identity.get('seed')) != (molecule, 'FG', seed):
+        raise ValueError('FG checkpoint identity disagrees with its directory')
+    constants = constants_from_saved(saved, 'FG')
+    if (constants.molecule != molecule or constants.n_active != len(FEATURE_NAMES[molecule])
+            or list(constants.training_sample_ids) != [f'{molecule}/{i:03d}' for i in range(1, 31, 2)]):
+        raise ValueError('FG preprocessing molecule, feature count or training population disagrees')
+    model = Model(constants, 'FG', ())
+    if metadata is not None:
+        if metadata['names'] != list(model.names) or metadata['count'] != model.num_parameters:
+            raise ValueError('Saved FG parameter layout does not match the production model')
+        if implementation in (IMPLEMENTATION, 'codes_v3_pdf_v1') and metadata.get('encoder_names') != []:
+            raise ValueError('Production FG has no trainable encoder parameters')
+        if implementation == IMPLEMENTATION and (metadata.get('parameter_indices') != model.parameter_indices
+                                                  or metadata.get('readout_bias_name') != 'bias'):
+            raise ValueError('Saved FG parameter indices disagree')
+        if implementation == IMPLEMENTATION and (
+                metadata.get('feature_names') != list(FEATURE_NAMES[molecule])
+                or metadata.get('feature_units') != list(FEATURE_UNITS[molecule])
+                or metadata.get('atom_order') != list(MOLECULES[molecule][0])):
+            raise ValueError('Saved FG geometric feature definitions or atom order disagree')
+        files.append(metadata_path)
+    files.append(preprocessing_path)
+    theta = np.load(directory / 'best_theta.npy', allow_pickle=False)
+    if theta.shape != (model.num_parameters,) or not np.isfinite(theta).all():
+        raise ValueError('Invalid FG checkpoint parameter dimensions or values')
+    with (directory / 'training_history.csv').open(newline='') as stream:
+        history = list(csv.DictReader(stream))
+    mae = np.asarray([float(row['train_mae_ha']) for row in history])
+    if (not len(history) or not np.isfinite(mae).all()
+            or [int(row['epoch']) for row in history] != list(range(1, len(history) + 1))
+            or (implementation != IMPLEMENTATION and len(history) != 1000)
+            or (implementation != 'codes_run1_fg_v1' and identity.get('update_count') != 2 * len(history))
+            or identity['best_epoch'] != int(np.argmin(mae)) + 1
+            or not np.isclose(identity['best_train_mae_ha'], mae.min(), atol=1e-12, rtol=0)):
+        raise ValueError('Incomplete FG history or checkpoint is not the training-MAE minimum')
+    for row in history:
+        if any((implementation == IMPLEMENTATION or key in row) and str(row.get(key)) != str(identity[key])
+               for key in ('molecule', 'model', 'seed')):
+            raise ValueError('Conflicting FG training history identity')
+    identity = dict(identity, implementation=implementation,
+                    source_provenance=dict(adapter='native_v5' if implementation == IMPLEMENTATION else 'FG_production',
+                                           files=[str(p) for p in files],
+                                           preprocessing=str(preprocessing_path)))
+    return constants, theta, identity
+
+
 def read_checkpoint(directory):
     """Validate saved semantics, layout and completion; never load optimizer state."""
     directory = Path(directory).resolve()
+    if directory.parent.name == 'FG':
+        return _read_fg_checkpoint(directory)
     identity, metadata, saved = [json.loads((directory / f).read_text())
                                  for f in ('result.json', 'parameters.json', 'preprocessing.json')]
     molecule, name, seed = identity['molecule'], identity['model'], identity['seed']
@@ -159,6 +268,12 @@ def saved_tables(directory, identity):
 
 def validate_statistics(training, c, name):
     """Check saved normalization through training residual moments; do not fit constants."""
+    if name == 'FG':
+        values = np.stack([sample.fingerprint for sample in training])
+        if (not np.allclose(np.mean(values, axis=0), c.mu, atol=1e-12, rtol=0)
+                or not np.allclose(np.std(values, axis=0, ddof=0), c.sigma, atol=1e-12, rtol=0)):
+            raise ValueError('Saved FG normalization disagrees with training geometries')
+        return
     diagonal = np.concatenate([s.pii for s in training])
     if name == 'MB1':
         pools = [(diagonal, c.Pii_mean, c.Pii_std)]
@@ -184,13 +299,30 @@ def validate_statistics(training, c, name):
 def load_checkpoint(directory, input_dir=None, *, samples=None):
     directory = Path(directory).resolve()
     constants, theta, identity = read_checkpoint(directory)
-    training, testing = load_data(input_dir or DEFAULT_INPUT, identity['molecule'], include_f=False) if samples is None else samples
+    is_fg = identity['model'] == 'FG'
+    if samples is None:
+        options = dict(geometric=True) if is_fg else {}
+        training, testing = load_data(input_dir or DEFAULT_INPUT, identity['molecule'], include_f=False, **options)
+    else:
+        training, testing = samples
+        if is_fg:
+            from .FG import load_sample, prepare_samples
+            converted = [s if hasattr(s, 'fingerprint') else load_sample(
+                s.source_file, s.molecule, s.geometry_index, s.sample_id)
+                         for s in training + testing]
+            prepared = {s.sample_id: s for s in prepare_samples(converted)}
+            training, testing = (tuple(prepared[s.sample_id] for s in batch) for batch in (training, testing))
     for split, batch, start in [('train', training, 1), ('test', testing, 2)]:
         if [s.sample_id for s in batch] != [f'{identity["molecule"]}/{i:03d}' for i in range(start, 31, 2)]:
             raise ValueError(f'Input {split} membership disagrees with saved population')
     for sample in training + testing:
         with np.load(sample.source_file, allow_pickle=False) as raw:
-            if (str(raw['molecule']) != identity['molecule'] or int(raw['point_index']) != sample.geometry_index
+            if is_fg:
+                expected = dict(molecule=identity['molecule'], point_index=sample.geometry_index,
+                                geometry_id=f'{sample.geometry_index:03d}')
+                if any(key in raw and str(raw[key].item()) != str(value) for key, value in expected.items()):
+                    raise ValueError('Geometry molecule/geometry identity mismatch')
+            elif (str(raw['molecule']) != identity['molecule'] or int(raw['point_index']) != sample.geometry_index
                     or str(raw['geometry_id']) != f'{sample.geometry_index:03d}'):
                 raise ValueError('Descriptor molecule/geometry identity mismatch')
             if identity['model'] == 'MB2_gamma':
@@ -198,7 +330,10 @@ def load_checkpoint(directory, input_dir=None, *, samples=None):
                 if (str(raw['rdm_source']) != RDM_SOURCE or str(raw['rdm_convention']) != RDM_CONVENTION
                         or int(raw['mp2_frozen_core']) != 0 or int(raw['rdm_frozen_core']) != 0):
                     raise ValueError('MB2_gamma requires native unrelaxed MP2 descriptors, frozen=0')
-        if len(sample.pii) != constants.n_active or any(
+        if is_fg:
+            if len(sample.fingerprint) != constants.n_active:
+                raise ValueError('Input FG feature count differs from the saved circuit')
+        elif len(sample.pii) != constants.n_active or any(
                 list(getattr(sample, key)) != list(getattr(training[0], key))
                 for key in ('active_ao_indices', 'source_selected_ao_indices', 'active_ao_labels')):
             raise ValueError('Input AO ordering or wire count mismatch')
@@ -207,17 +342,29 @@ def load_checkpoint(directory, input_dir=None, *, samples=None):
     for path in populations:
         if path.is_file():
             population = json.loads(path.read_text())
-            if any(population[k] != list(getattr(training[0], k)) for k in ('active_ao_indices', 'source_selected_ao_indices', 'active_ao_labels')):
+            if not is_fg and any(population[k] != list(getattr(training[0], k)) for k in ('active_ao_indices', 'source_selected_ao_indices', 'active_ao_labels')):
                 raise ValueError(f'Saved AO order differs from descriptors: {path}')
             if population['train'] != [s.sample_id for s in training] or population['test'] != [s.sample_id for s in testing]:
                 raise ValueError(f'Saved population differs from descriptors: {path}')
     validate_statistics(training, constants, identity['model'])
     model = Model(constants, identity['model'], training + testing)
     model.provenance = dict(checkpoint=str(directory / 'best_theta.npy'), implementation=identity['implementation'],
-                            preprocessing=str(directory / 'preprocessing.json'),
+                            preprocessing=identity.get('source_provenance', {}).get('preprocessing', str(directory / 'preprocessing.json')),
                             preprocessing_schema=getattr(constants, 'parameter_schema', None),
-                            sha256={f: hashlib.sha256((directory / f).read_bytes()).hexdigest()
+                            sha256={f: hashlib.sha256(Path(f).read_bytes()).hexdigest()
+                                    for f in identity['source_provenance']['files']} if is_fg else
+                                   {f: hashlib.sha256((directory / f).read_bytes()).hexdigest()
                                     for f in ('best_theta.npy', 'preprocessing.json', 'parameters.json', 'result.json')})
+    if is_fg:
+        model.provenance['adapter'] = identity['source_provenance']['adapter']
+        saved, _ = saved_tables(directory, identity)
+        indexed = {int(row['geometry_id']): row for row in saved}
+        for sample in training + testing:
+            row = indexed[sample.geometry_index]
+            if (abs(float(row['target_Ha']) - sample.target_energy) > 1e-10
+                    or abs(float(row['q_A']) - sample.scan_coordinate) > 1e-12
+                    or abs(float(row['bond_length_A']) - sample.bond_length) > 1e-12):
+                raise ValueError('Input FG target or geometry differs from saved predictions')
     return model, torch.tensor(theta, dtype=torch.float64), training, testing, identity
 
 
