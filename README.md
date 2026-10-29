@@ -30,16 +30,16 @@ Predict molecular correlation energies, $\Delta E = E_{\mathrm{FCI}} - E_{\mathr
 
 ## Algorithm / Technical Detail
 
-HF, H2O, NH3, N2, and CO are treated as neutral singlets in STO-3G. RHF equilibrium geometries and harmonic curvatures define 30 equally spaced bond-stretch geometries spanning the harmonic $n=1$ interval. PySCF evaluates RHF and frozen-core FCI energies, freezing one canonical core orbital for HF/H2O/NH3 and two for N2/CO. Full-AO Löwdin transformations, $P_L=S^{1/2}P_{\mathrm{AO}}S^{1/2}$ and $F_L=S^{-1/2}F_{\mathrm{AO}}S^{-1/2}$, precede exclusion of heavy-atom 1s AOs. Native unrelaxed RMP2 (`frozen=0`) supplies the spin-summed two-particle density: all four indices are transformed from MO to AO to Löwdin coordinates before extracting $\Gamma_L[I,I,J,J]$ for selected pairs $i<j$. The $\Gamma^0$ hierarchy is constructed from the RHF density; Fock matrices are archived but are not model inputs.
+HF, H2O, NH3, N2, and CO are treated as neutral singlets in STO-3G. RHF equilibrium geometries and harmonic curvatures define 30 equally spaced bond-stretch geometries spanning the harmonic $n=1$ interval. PySCF evaluates RHF and frozen-core FCI energies, freezing one canonical core orbital for HF/H2O/NH3 and two for N2/CO. Full-AO Löwdin transformations, $P_L=S^{1/2}P_{\mathrm{AO}}S^{1/2}$, precede exclusion of heavy-atom 1s AOs. Native unrelaxed RMP2  supplies the spin-summed two-particle density: all four indices are transformed from MO to AO to Löwdin coordinates before extracting $\Gamma_L$ for selected pairs. The $\Gamma^0$ hierarchy is constructed from the RHF density; Fock matrices are archived but are not model inputs.
 
 | Model | Density encoding |
 | --- | --- |
 | `MB1` | Standardized RHF diagonal density only. |
 | `MB2` | Adds diagonal and off-diagonal products of separately standardized density entries. |
 | `MB3`, `MB4` | Extend `MB2` with independently weighted density-cycle groups through order three or four. |
-| `MB2_gamm0` | Adds standardized $\Gamma^0_2=P_{ii}P_{jj}-\tfrac12 P_{ij}P_{ji}$ from raw selected $P_L$. |
-| `MB2_gamma` | Adds standardized native MP2 $\Gamma_L[I,J,I,J]$. |
-| `MB3_gamm0`, `MB4_gamma0` | Add separately standardized RHF-derived $\Gamma^0_k$ for orders two through three or four. |
+| `MB2_gamm0` | Adds standardized $\Gamma^0$ from raw selected $P_L$. |
+| `MB2_gamma` | Adds standardized native MP2 $\Gamma$. |
+| `MB3_gamm0`, `MB4_gamma0` | Add separately standardized RHF-derived $\Gamma^0$ for orders two through three or four. |
 | `FG` | Original `FG_production` geometric fingerprint; no density inputs or trainable encoder coefficients. |
 
 - MB circuits: one qubit per selected AO; $(\pi/2)\tanh(u)$ encoding angles with `RY`, `IsingZZ`, and `MultiRZ` gates; two layers of shared `RY` rotations and CNOT rings. A linear readout uses local Pauli-Z expectations and their first three moments. PennyLane `default.qubit` uses exact expectations and PyTorch backpropagation.
@@ -58,14 +58,6 @@ python -B \
   --models all \
   --epochs 1000 \
 ```
-
-
-```bash
-cd /Users/novaz/Desktop/qml2.0
-OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
-/Users/novaz/Desktop/encoding_qml/.venv/bin/python -B -m paper_source_v5.checkpoints \
-  --checkpoint FG_production/H2O/FG/seed_00 --tolerance 1e-12
 
 ## Requirement
 ```bash
