@@ -39,7 +39,7 @@ HF, H2O, NH3, N2, CO, and H2O2 are treated as neutral singlets in STO-3G. RHF eq
 | `MB2` | Adds diagonal and off-diagonal products of separately standardized density entries. |
 | `MB3`, `MB4` | Extend `MB2` with independently weighted density-cycle groups through order three or four. |
 | `MB2_gamm0` | Adds standardized $\Gamma^0_2=P_{ii}P_{jj}-\tfrac12 P_{ij}P_{ji}$ from raw selected $P_L$. |
-| `MB2_gamma` | Adds standardized native MP2 $\Gamma_L[I,I,J,J]$. |
+| `MB2_gamma` | Adds standardized native MP2 $\Gamma_L[I,J,I,J]$. |
 | `MB3_gamm0`, `MB4_gamma0` | Add separately standardized RHF-derived $\Gamma^0_k$ for orders two through three or four. |
 
 - Circuits: one qubit per selected AO; $(\pi/2)\tanh(u)$ encoding angles with `RY`, `IsingZZ`, and `MultiRZ` gates; two layers of shared `RY` rotations and CNOT rings. A linear readout uses local Pauli-Z expectations and their first three moments. PennyLane `default.qubit` uses exact expectations and PyTorch backpropagation.
@@ -50,12 +50,9 @@ HF, H2O, NH3, N2, CO, and H2O2 are treated as neutral singlets in STO-3G. RHF eq
 ## Example Command
 
 ```bash
-cd /Users/novaz/Desktop/qml2.0
-# Train one seed using existing descriptors_native_mp2/HF inputs and 1000 epochs.
-# Write a new timestamped run under paper_source_v5/results.
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 BLIS_NUM_THREADS=1 \
-/Users/novaz/Desktop/encoding_qml/.venv/bin/python -B -m paper_source_v5.train \
+python -B -m paper_source_v5.train \
   --molecules HF --models MB2_gamma --seeds 0
 ```
 
