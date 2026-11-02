@@ -2,6 +2,8 @@
 
 This repository contains the code and data for the paper:
 "Electronic-Structure-Informed Many-Body Encoding for Quantum Machine Learning"
+https://doi.org/10.48550/arXiv.2610.40840
+
 
 
 
